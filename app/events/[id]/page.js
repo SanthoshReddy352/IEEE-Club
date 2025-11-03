@@ -57,58 +57,71 @@ export default function EventDetailPage() {
     fetchEventData();
   }, [params.id]);
 
-  // 2. Auth Listener and Registration Check (Runs after event data loading is complete)
+  // 2. Auth Listener and Registration Check (Runs when event data is ready)
   useEffect(() => {
     // Wait until event data has been fetched
-    if (loading) return; 
+    if (loading || !params.id || !event) return; 
 
-    setAuthLoading(true);
     let authSubscription = null;
-    
-    const setupAuthListener = async () => {
-        
-        // A. Initial check
-        const { data: { session } } = await supabase.auth.getSession();
-        const currentUser = session?.user ?? null;
-        setUser(currentUser);
-        setAuthLoading(false); 
+    let isActive = true;
 
-        // B. Set up listener
-        const { data: subscription } = supabase.auth.onAuthStateChange(async (event, session) => {
-            const changedUser = session?.user ?? null;
-            setUser(changedUser);
+    const setupAuthAndCheckReg = async () => {
+        setAuthLoading(true);
+        try {
+            // A. Initial Session Check (Awaited)
+            const { data: { session } } = await supabase.auth.getSession();
+            const currentUser = session?.user ?? null;
             
-            if (changedUser) {
-                // Run check when user status changes to signed in
-                checkRegistrationStatus(changedUser.id, params.id);
-            } else if (event === 'SIGNED_OUT') {
-                // Clear registration status on sign out
+            if (!isActive) return;
+            setUser(currentUser);
+            
+            // B. Initial Registration Check (Awaited)
+            if (currentUser) {
+                // Must await this check to ensure authLoading controls rendering accurately
+                await checkRegistrationStatus(currentUser.id, params.id);
+            } else {
                 setIsRegistered(false);
             }
-        });
-        
-        // C. Store the subscription object correctly for cleanup
-        if (subscription && subscription.subscription) {
-            // FIX: Store the nested object containing the unsubscribe function
-            authSubscription = subscription.subscription;
-        }
+            
+            // C. Setup Listener for subsequent state changes
+            const { data: subscription } = supabase.auth.onAuthStateChange(async (event, session) => {
+                const changedUser = session?.user ?? null;
+                if (!isActive) return;
+                setUser(changedUser);
+                
+                if (changedUser) {
+                    await checkRegistrationStatus(changedUser.id, params.id);
+                } else if (event === 'SIGNED_OUT') {
+                    setIsRegistered(false);
+                }
+            });
 
-        // D. Perform initial registration check once user/event data is available
-        if (currentUser && event) { 
-             checkRegistrationStatus(currentUser.id, params.id);
+            if (subscription && subscription.subscription) {
+                authSubscription = subscription.subscription;
+            }
+            
+        } catch (e) {
+            console.error("Auth/Reg check failed:", e);
+            setUser(null);
+            setIsRegistered(false);
+        } finally {
+            if (isActive) {
+                 // Set to false only after initial session and reg check complete
+                 setAuthLoading(false); 
+            }
         }
     };
+    
+    setupAuthAndCheckReg();
 
-    setupAuthListener();
-
-    // E. Cleanup function (called on component unmount or dependency change)
     return () => {
+        isActive = false;
         if (authSubscription) {
-            // CORRECT CALL: .unsubscribe() is called on the nested object
+            // Correct call: .unsubscribe() is called on the nested subscription object
             authSubscription.unsubscribe(); 
         }
     };
-  }, [params.id, loading, event, checkRegistrationStatus]); // Dependency on loading & event ensures proper timing
+  }, [params.id, loading, event, checkRegistrationStatus]); 
 
   const handleSubmit = async (formData) => {
     if (!user) {
@@ -155,7 +168,7 @@ export default function EventDetailPage() {
     }
   }
 
-  // Combine loading states
+  // Combine loading states for the spinner
   if (loading || authLoading) {
     return (
       <div className="container mx-auto px-4 py-12">
