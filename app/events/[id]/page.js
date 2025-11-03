@@ -1,11 +1,11 @@
 'use client'
 
-import { useEffect, useState } from 'react'
-import { useParams, useRouter, usePathname } from 'next/navigation' 
+import { useEffect, useState, useCallback } from 'react'
+import { useParams, useRouter } from 'next/navigation' 
 import DynamicForm from '@/components/DynamicForm'
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card' 
 import { Button } from '@/components/ui/button'
-import { Calendar, Clock, ArrowLeft } from 'lucide-react'
+import { Calendar, Clock, ArrowLeft, Loader2 } from 'lucide-react'
 import { format } from 'date-fns'
 import Link from 'next/link'
 import { supabase } from '@/lib/supabase/client' 
@@ -13,92 +13,119 @@ import { supabase } from '@/lib/supabase/client'
 export default function EventDetailPage() {
   const params = useParams()
   const router = useRouter()
-  const pathname = usePathname() 
   const [event, setEvent] = useState(null)
-  const [loading, setLoading] = useState(true)
+  const [loading, setLoading] = useState(true) // For event data fetch
   const [submitted, setSubmitted] = useState(false)
   const [user, setUser] = useState(null) 
-  const [authLoading, setAuthLoading] = useState(true) 
-  const [isRegistered, setIsRegistered] = useState(false) // NEW state
+  const [authLoading, setAuthLoading] = useState(true) // For auth session status
+  const [isRegistered, setIsRegistered] = useState(false) 
 
-  useEffect(() => {
-    if (params.id) {
-      fetchEvent()
-    }
-  }, [params.id])
-
-  // Combined fetch and auth check
-  const fetchEvent = async () => {
-    try {
-      // 1. Fetch Event
-      const response = await fetch(`/api/events/${params.id}`)
-      const data = await response.json()
-      if (data.success) {
-        setEvent(data.event)
-      } else {
-        setEvent(null)
-      }
-
-      // 2. Check Auth Status
-      const { data: { session } } = await supabase.auth.getSession()
-      const currentUser = session?.user ?? null;
-      setUser(currentUser)
-      
-      // 3. NEW: Check Registration Status if user is logged in
-      if (currentUser && data.success) {
-          await checkRegistrationStatus(currentUser.id, params.id) // Use params.id since data.event.id is the same
-      }
-
-      // 4. Listen for Auth changes
-      const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
-        const changedUser = session?.user ?? null;
-        setUser(changedUser)
-        if (changedUser && data.success) {
-            checkRegistrationStatus(changedUser.id, params.id)
-        } else {
-            setIsRegistered(false);
-        }
-      })
-
-      // Cleanup subscription
-      return () => {
-        subscription?.unsubscribe()
-      }
-
-    } catch (error) {
-      console.error('Error fetching event or session:', error)
-    } finally {
-      setLoading(false)
-      setAuthLoading(false)
-    }
-  }
-  
-  // NEW function: Check if the current user is registered for the event
-  const checkRegistrationStatus = async (userId, eventId) => {
+  // Memoized registration status checker
+  const checkRegistrationStatus = useCallback(async (userId, eventId) => {
       try {
-          // Use the modified API to query for a specific participant
+          // Fetches the participant record by eventId and userId
           const response = await fetch(`/api/participants/${eventId}?userId=${userId}`)
           const data = await response.json()
-          // If a participant object is returned (data.participant exists and is not null), the user is registered.
+          // Checks if data.participant exists and is not null
           setIsRegistered(data.success && !!data.participant)
       } catch (error) {
           console.error('Error checking registration status:', error)
           setIsRegistered(false)
       }
-  }
+  }, [])
+
+  // 1. Fetch Event Data (Runs once on mount/ID change)
+  useEffect(() => {
+    const fetchEventData = async () => {
+        if (!params.id) return;
+        setLoading(true);
+        try {
+            const response = await fetch(`/api/events/${params.id}`);
+            const data = await response.json();
+            if (data.success) {
+                setEvent(data.event);
+            } else {
+                setEvent(null);
+            }
+        } catch (error) {
+            console.error('Error fetching event:', error);
+            setEvent(null);
+        } finally {
+            setLoading(false);
+        }
+    };
+    fetchEventData();
+  }, [params.id]);
+
+  // 2. Auth Listener and Registration Check (Runs after event data loading is complete)
+  useEffect(() => {
+    // Wait until event data has been fetched
+    if (loading) return; 
+
+    setAuthLoading(true);
+    let authSubscription = null;
+    
+    const setupAuthListener = async () => {
+        
+        // A. Initial check
+        const { data: { session } } = await supabase.auth.getSession();
+        const currentUser = session?.user ?? null;
+        setUser(currentUser);
+        setAuthLoading(false); 
+
+        // B. Set up listener
+        const { data: subscription } = supabase.auth.onAuthStateChange(async (event, session) => {
+            const changedUser = session?.user ?? null;
+            setUser(changedUser);
+            
+            if (changedUser) {
+                // Run check when user status changes to signed in
+                checkRegistrationStatus(changedUser.id, params.id);
+            } else if (event === 'SIGNED_OUT') {
+                // Clear registration status on sign out
+                setIsRegistered(false);
+            }
+        });
+        
+        // C. Store the subscription object correctly for cleanup
+        if (subscription && subscription.subscription) {
+            // FIX: Store the nested object containing the unsubscribe function
+            authSubscription = subscription.subscription;
+        }
+
+        // D. Perform initial registration check once user/event data is available
+        if (currentUser && event) { 
+             checkRegistrationStatus(currentUser.id, params.id);
+        }
+    };
+
+    setupAuthListener();
+
+    // E. Cleanup function (called on component unmount or dependency change)
+    return () => {
+        if (authSubscription) {
+            // CORRECT CALL: .unsubscribe() is called on the nested object
+            authSubscription.unsubscribe(); 
+        }
+    };
+  }, [params.id, loading, event, checkRegistrationStatus]); // Dependency on loading & event ensures proper timing
 
   const handleSubmit = async (formData) => {
-    // Re-check auth before final submission
     if (!user) {
-        alert("You must be logged in to register for an event.")
+        alert("Authentication failed. Please log in again.")
         router.push(`/auth?redirect=${params.id}`) 
         return
     }
     
-    // Safety check for duplicate registration
     if (isRegistered) {
         alert("You are already registered for this event.")
         return
+    }
+    
+    if (!user.id) {
+        alert("Error: Missing user ID. Please log in again.")
+        router.push('/auth')
+        return;
     }
     
     try {
@@ -107,7 +134,7 @@ export default function EventDetailPage() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           event_id: params.id,
-          user_id: user.id, // NEW: Pass the user ID for linking
+          user_id: user.id, // Ensure user ID is passed
           responses: formData,
         }),
       })
@@ -115,9 +142,8 @@ export default function EventDetailPage() {
       const data = await response.json()
       if (data.success) {
         setSubmitted(true)
-        setIsRegistered(true) // Update status immediately
+        setIsRegistered(true) 
       } else if (response.status === 409) {
-        // Handle explicit conflict error from backend
         alert("Registration failed: You are already registered for this event.")
         setIsRegistered(true)
       } else {
@@ -129,11 +155,12 @@ export default function EventDetailPage() {
     }
   }
 
+  // Combine loading states
   if (loading || authLoading) {
     return (
       <div className="container mx-auto px-4 py-12">
         <div className="text-center py-12">
-          <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#00629B]"></div>
+          <Loader2 className="inline-block animate-spin h-12 w-12 text-[#00629B]" />
           <p className="mt-4 text-gray-600">Loading event details...</p>
         </div>
       </div>
@@ -166,7 +193,7 @@ export default function EventDetailPage() {
   const registrationAvailable = event.registration_open && event.is_active;
 
   const registrationContent = () => {
-      // NEW: User is already registered
+      // 1. Already Registered
       if (isRegistered) {
           return (
               <Card className="border-green-500">
@@ -217,6 +244,7 @@ export default function EventDetailPage() {
           )
       }
 
+      // 2. Not Logged In
       if (!user) {
           return (
               <Card className="border-yellow-500">
@@ -235,6 +263,7 @@ export default function EventDetailPage() {
           )
       }
       
+      // 3. Successfully submitted in current session
       if (submitted) {
           return (
               <Card className="border-green-500">
@@ -274,6 +303,7 @@ export default function EventDetailPage() {
       }
 
 
+      // 4. Show Form
       return (
           <Card>
               <CardHeader>

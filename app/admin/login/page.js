@@ -9,8 +9,6 @@ import { Label } from '@/components/ui/label'
 import { Button } from '@/components/ui/button'
 import { Tabs, TabsContent } from '@/components/ui/tabs'
 
-// Removed ADMIN_EMAIL constant
-
 export default function AdminLoginPage() {
   const router = useRouter()
   const [loading, setLoading] = useState(false)
@@ -23,17 +21,37 @@ export default function AdminLoginPage() {
     setLoading(true)
 
     try {
-      const { data, error } = await supabase.auth.signInWithPassword({
+      const { data, error: loginError } = await supabase.auth.signInWithPassword({
         email: loginData.email,
         password: loginData.password,
       })
 
-      if (error) throw error
+      if (loginError) throw loginError
 
-      // 🚨 REMOVED CLIENT-SIDE ADMIN CHECK (relying on ProtectedRoute now)
-      // The user is logged in. ProtectedRoute will check their session metadata.
+      // Check if the newly logged-in user is an admin
+      const user = data.user;
       
-      router.push('/admin')
+      const { data: adminData, error: adminError } = await supabase
+        .from('admin_users')
+        .select('user_id')
+        .eq('user_id', user.id)
+        .maybeSingle() 
+
+      const isAdmin = !!adminData;
+      
+      if (adminError && adminError.message !== 'Policy violation') {
+          // If we can't check the admin status for some other DB error
+          throw adminError; 
+      }
+      
+      if (isAdmin) {
+          router.push('/admin')
+      } else {
+          // Log out non-admin users immediately after they login
+          await supabase.auth.signOut() 
+          setError('Access Denied. This login is for administrators only.')
+      }
+
     } catch (error) {
       setError(error.message)
     } finally {
@@ -41,8 +59,6 @@ export default function AdminLoginPage() {
     }
   }
 
-  // ... (handleSignup is already removed)
-  
   return (
     <div className="min-h-screen flex items-center justify-center bg-gray-50 py-12 px-4">
       <div className="w-full max-w-md">

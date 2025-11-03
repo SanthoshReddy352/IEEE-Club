@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react' // CORRECTED: Changed '=>' to 'from'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { supabase } from '@/lib/supabase/client'
 
@@ -22,8 +22,6 @@ export default function ProtectedRoute({ children }) {
     // 2. Session Exists: Query the public.admin_users table to check for role
     try {
       // The SELECT query checks if an entry exists in the admin_users table for this user's ID.
-      // This relies on the RLS policy created in SUPABASE_SETUP.sql allowing authenticated users 
-      // to SELECT only their own entry.
       const { data, error } = await supabase
         .from('admin_users')
         .select('user_id')
@@ -33,9 +31,10 @@ export default function ProtectedRoute({ children }) {
       const isAdmin = !!data;
       
       if (!isAdmin) {
-        // 3a. Not Admin: Sign them out and redirect
+        // 3a. Not Admin: Sign them out and redirect to home (or admin login)
         await supabase.auth.signOut() 
-        alert("Access Denied. Only administrators can access this portal.")
+        // Removed alert() which was causing the issue on public pages.
+        // Redirect non-admins trying to access protected routes to the home page.
         router.push('/') 
       } else {
         // 3b. Is Admin: Grant Access
@@ -95,5 +94,7 @@ export default function ProtectedRoute({ children }) {
     )
   }
 
+  // Only render children if user has passed the admin check (i.e., loading is false)
+  // If not admin, the checkUser function already pushed a redirect.
   return children
 }
