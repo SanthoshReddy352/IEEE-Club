@@ -238,6 +238,8 @@ export async function POST(request) {
         event_date: body.event_date || null,
         is_active: body.is_active !== undefined ? body.is_active : true,
         registration_open: body.registration_open !== undefined ? body.registration_open : true,
+        registration_start: body.registration_start || null, // NEW FIELD
+        registration_end: body.registration_end || null,     // NEW FIELD
         form_fields: body.form_fields || [],
       }
 
@@ -264,7 +266,7 @@ export async function POST(request) {
     if (segments[0] === 'participants' && !segments[1]) {
       const participantData = {
         event_id: body.event_id,
-        user_id: body.user_id, // NEW: Expect user_id from frontend
+        user_id: body.user_id,
         responses: body.responses,
       }
 
@@ -391,6 +393,8 @@ export async function PUT(request) {
       if (body.event_date !== undefined) updateData.event_date = body.event_date
       if (body.is_active !== undefined) updateData.is_active = body.is_active
       if (body.registration_open !== undefined) updateData.registration_open = body.registration_open
+      if (body.registration_start !== undefined) updateData.registration_start = body.registration_start // NEW FIELD
+      if (body.registration_end !== undefined) updateData.registration_end = body.registration_end     // NEW FIELD
       if (body.form_fields !== undefined) updateData.form_fields = body.form_fields
 
       updateData.updated_at = new Date().toISOString()

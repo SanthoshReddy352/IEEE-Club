@@ -13,6 +13,13 @@ import { Upload, Link as LinkIcon } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
 import { supabase } from '@/lib/supabase/client'
 
+// Helper to convert datetime-local string (YYYY-MM-DDTHH:MM) back to ISO format (UTC)
+const toISOString = (dateTimeLocalString) => {
+    if (!dateTimeLocalString) return null;
+    // Append ':00Z' to treat the input time as UTC, which is required by the Supabase DB.
+    return new Date(dateTimeLocalString + ':00Z').toISOString();
+}
+
 function CreateEventContent() {
   const router = useRouter()
   const [formData, setFormData] = useState({
@@ -21,6 +28,8 @@ function CreateEventContent() {
     event_date: '',
     is_active: true,
     registration_open: true,
+    registration_start: '', 
+    registration_end: '',   
   })
   const [bannerMode, setBannerMode] = useState('url') // 'url' or 'upload'
   const [bannerUrl, setBannerUrl] = useState('')
@@ -76,10 +85,14 @@ function CreateEventContent() {
         finalBannerUrl = bannerUrl
       }
 
+      // Convert datetime-local strings back to ISO strings for database ingestion
       const eventData = {
         ...formData,
         banner_url: finalBannerUrl,
         form_fields: [],
+        event_date: toISOString(formData.event_date),
+        registration_start: toISOString(formData.registration_start),
+        registration_end: toISOString(formData.registration_end),
       }
 
       const response = await fetch('/api/events', {
@@ -90,9 +103,11 @@ function CreateEventContent() {
 
       const data = await response.json()
       if (data.success) {
+        // Redirect to form builder after successful creation
         router.push(`/admin/events/${data.event.id}/form-builder`)
       } else {
         alert('Failed to create event')
+        console.error('API Error:', data.error);
       }
     } catch (error) {
       console.error('Error creating event:', error)
@@ -141,6 +156,28 @@ function CreateEventContent() {
                 type="datetime-local"
                 value={formData.event_date}
                 onChange={(e) => setFormData({ ...formData, event_date: e.target.value })}
+              />
+            </div>
+            
+            {/* Registration Start Date */}
+            <div className="space-y-2">
+              <Label htmlFor="registration_start">Registration Start Date & Time</Label>
+              <Input
+                id="registration_start"
+                type="datetime-local"
+                value={formData.registration_start}
+                onChange={(e) => setFormData({ ...formData, registration_start: e.target.value })}
+              />
+            </div>
+
+            {/* Registration End Date */}
+            <div className="space-y-2">
+              <Label htmlFor="registration_end">Registration End Date & Time</Label>
+              <Input
+                id="registration_end"
+                type="datetime-local"
+                value={formData.registration_end}
+                onChange={(e) => setFormData({ ...formData, registration_end: e.target.value })}
               />
             </div>
 
