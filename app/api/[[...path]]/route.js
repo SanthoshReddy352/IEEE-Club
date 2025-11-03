@@ -5,6 +5,7 @@ import { createClient } from '@supabase/supabase-js'
 const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL
 const supabaseServiceKey = process.env.SUPABASE_SERVICE_ROLE_KEY
 const supabase = createClient(supabaseUrl, supabaseServiceKey)
+const supabaseAnonKey = process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY // Added for scoped client
 
 // Helper function to extract path segments
 function getPathSegments(request) {
@@ -30,6 +31,26 @@ const corsHeaders = {
 // Handle OPTIONS request
 export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders })
+}
+
+// Helper to get user from request header (Authorization: Bearer <token>)
+async function getUser(request) {
+  const authHeader = request.headers.get('Authorization')
+  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+    return { user: null, error: new Error('No Authorization header') }
+  }
+
+  const token = authHeader.split(' ')[1]
+  // Create a new supabase client scoped to the user's JWT
+  const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+    global: {
+      headers: { 'Authorization': `Bearer ${token}` },
+    },
+  })
+  
+  const { data: { user }, error } = await userSupabase.auth.getUser()
+
+  return { user, error }
 }
 
 // GET Handler
@@ -90,6 +111,37 @@ export async function GET(request) {
         { headers: corsHeaders }
       )
     }
+    
+    // NEW: GET /api/profile - Get current user profile
+    if (segments[0] === 'profile') {
+        const { user, error: authError } = await getUser(request)
+        if (!user) {
+            return NextResponse.json(
+                { success: false, error: authError?.message || 'Unauthorized' },
+                { status: 401, headers: corsHeaders }
+            )
+        }
+        
+        // Use the authenticated user's ID to fetch their profile
+        const { data, error } = await supabase
+          .from('profiles')
+          .select('name, phone_number, created_at, updated_at')
+          .eq('id', user.id)
+          .maybeSingle()
+
+        if (error) {
+          return NextResponse.json(
+            { success: false, error: error.message },
+            { status: 500, headers: corsHeaders }
+          )
+        }
+
+        return NextResponse.json(
+          { success: true, profile: data || { id: user.id, name: '', phone_number: '', email: user.email } },
+          { headers: corsHeaders }
+        )
+    }
+
 
     // GET /api/participants/:eventId - Get participants for an event
     if (segments[0] === 'participants' && segments[1] && segments[1] !== 'count') {
@@ -260,6 +312,44 @@ export async function PUT(request) {
   try {
     const segments = getPathSegments(request)
     const body = await request.json()
+    
+    // NEW: PUT /api/profile - Update current user profile
+    if (segments[0] === 'profile') {
+        const { user, error: authError } = await getUser(request)
+        if (!user) {
+            return NextResponse.json(
+                { success: false, error: authError?.message || 'Unauthorized' },
+                { status: 401, headers: corsHeaders }
+            )
+        }
+        
+        const updateData = {
+            id: user.id, // Primary key
+            name: body.name,
+            phone_number: body.phone_number,
+            updated_at: new Date().toISOString()
+        }
+
+        // Use upsert to either insert a new row or update an existing one for the profile
+        const { data, error } = await supabase
+            .from('profiles')
+            .upsert(updateData)
+            .select()
+            .single()
+
+        if (error) {
+            return NextResponse.json(
+                { success: false, error: error.message },
+                { status: 500, headers: corsHeaders }
+            )
+        }
+
+        return NextResponse.json(
+            { success: true, profile: data },
+            { headers: corsHeaders }
+        )
+    }
+
 
     // PUT /api/events/:id - Update event
     if (segments[0] === 'events' && segments[1]) {

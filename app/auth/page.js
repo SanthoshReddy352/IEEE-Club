@@ -96,12 +96,12 @@ export default function ParticipantAuthPage() {
     setIsResetting(true)
 
     try {
-        const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
-             // You must configure this URL in your Supabase Auth settings 
-             // or set it to point to a page that handles the password update token.
-             // For Next.js, this is typically the current domain or a specific /update-password page.
-             redirectTo: `${window.location.origin}/update-password`,
-        })
+    const { error } = await supabase.auth.resetPasswordForEmail(resetEmail, {
+         // You must configure this URL in your Supabase Auth settings 
+         // or set it to point to a page that handles the password update token.
+         // FIX: Changed '/update-password' to '/update_password'
+         redirectTo: `${window.location.origin}/update_password`,
+    })
 
         if (error) throw error
         

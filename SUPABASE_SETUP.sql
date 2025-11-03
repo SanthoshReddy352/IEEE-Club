@@ -86,6 +86,12 @@ INSERT INTO storage.buckets (id, name, public)
 VALUES ('event-banners', 'event-banners', true)
 ON CONFLICT (id) DO NOTHING;
 
+-- NEW: Drop existing storage policies if they exist (to make script idempotent)
+DROP POLICY IF EXISTS "Event banners are publicly accessible" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can upload event banners" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can update event banners" ON storage.objects;
+DROP POLICY IF EXISTS "Authenticated users can delete event banners" ON storage.objects;
+
 -- Storage policies
 CREATE POLICY "Event banners are publicly accessible"
     ON storage.objects FOR SELECT
@@ -113,6 +119,11 @@ CREATE TABLE IF NOT EXISTS admin_users (
 -- Enable Row Level Security
 ALTER TABLE admin_users ENABLE ROW LEVEL SECURITY;
 
+-- Drop existing admin_users policies if they exist
+DROP POLICY IF EXISTS "Authenticated users can read their own admin status" ON admin_users;
+DROP POLICY IF EXISTS "Service role can manage all admin users" ON admin_users;
+
+
 -- RLS Policy: Authenticated users can only see their own entry to check their role
 CREATE POLICY "Authenticated users can read their own admin status"
     ON admin_users FOR SELECT
@@ -123,3 +134,31 @@ CREATE POLICY "Service role can manage all admin users"
     ON admin_users FOR ALL
     USING (auth.role() = 'service_role') 
     WITH CHECK (auth.role() = 'service_role');
+
+-- NEW: Add profiles table for general user data (non-admin)
+CREATE TABLE IF NOT EXISTS profiles (
+    id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+    name TEXT,
+    phone_number TEXT,
+    created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+    updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+);
+
+-- NEW: Enable RLS for profiles table
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+
+-- NEW: Drop existing profiles policies if they exist
+DROP POLICY IF EXISTS "Users can view their own profile" ON profiles;
+DROP POLICY IF EXISTS "Users can create and update their own profile" ON profiles;
+
+
+-- NEW: RLS Policy: Users can view their own profile
+CREATE POLICY "Users can view their own profile"
+    ON profiles FOR SELECT
+    USING (auth.uid() = id);
+
+-- NEW: RLS Policy: Users can create and update their own profile
+CREATE POLICY "Users can create and update their own profile"
+    ON profiles FOR ALL
+    USING (auth.uid() = id)
+    WITH CHECK (auth.uid() = id);

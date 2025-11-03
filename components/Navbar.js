@@ -3,7 +3,7 @@
 import Link from 'next/link'
 import { usePathname, useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
-import { Menu, X, LogIn, LogOut } from 'lucide-react'
+import { Menu, X, LogIn, LogOut, User } from 'lucide-react' // Added User icon
 import { useState, useEffect } from 'react'
 import { supabase } from '@/lib/supabase/client'
 import { useAdminStatus } from '@/hooks/use-admin-status' 
@@ -78,7 +78,7 @@ export default function Navbar() {
             <Link
               href="/events"
               className={`transition-colors hover:text-[#00629B] ${
-                isActive('/events') ? 'text-[#00629B] font-semibold' : 'text-gray-600'
+                isActive('/events') ? 'text-[#0629B] font-semibold' : 'text-gray-600'
               }`}
             >
               Events
@@ -99,6 +99,16 @@ export default function Navbar() {
             {user ? (
               <>
                 {/* User is logged in */}
+                <Link href="/profile">
+                  <Button 
+                    variant="ghost" 
+                    className={`text-gray-600 hover:text-[#00629B] ${isActive('/profile') ? 'font-semibold' : ''}`}
+                  >
+                    <User size={16} className="mr-2" />
+                    Profile
+                  </Button>
+                </Link>
+                
                 {isAdmin && (
                     <Link href="/admin">
                       <Button variant="ghost" className="text-gray-600 hover:text-[#00629B]">
@@ -171,6 +181,14 @@ export default function Navbar() {
 
             {user ? (
               <>
+                <Link
+                  href="/profile"
+                  onClick={() => setMobileMenuOpen(false)}
+                  className="block py-2 text-gray-600 hover:text-[#00629B]"
+                >
+                  Profile
+                </Link>
+              
                 {/* User is logged in */}
                 {isAdmin && (
                     <Link
