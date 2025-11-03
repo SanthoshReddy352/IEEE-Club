@@ -350,9 +350,12 @@ export default function EventDetailPage() {
 
       <div className="container mx-auto px-4 -mt-16 relative z-10 pb-12">
         <div className="max-w-4xl mx-auto">
-          {/* Back Button */}
+          {/* Back Button - MODIFIED CLASSNAMES */}
           <Link href="/events">
-            <Button variant="ghost" className="mb-4 text-white hover:text-white/80">
+            <Button 
+                variant="ghost" 
+                className="mb-4 text-white hover:text-gray-200 hover:bg-white/10" // FIX: Ensure text is white and hover effect is subtle
+            >
               <ArrowLeft size={20} className="mr-2" />
               Back to Events
             </Button>

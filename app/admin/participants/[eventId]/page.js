@@ -15,7 +15,8 @@ function ParticipantsContent() {
   const [event, setEvent] = useState(null)
   const [participants, setParticipants] = useState([])
   const [loading, setLoading] = useState(true)
-  const [columnHeaders, setColumnHeaders] = useState([]) // NEW: To store dynamic column headers
+  // Stores the final list of fields, used for generating headers and CSV columns
+  const [dynamicFields, setDynamicFields] = useState([]) 
 
   useEffect(() => {
     if (params.eventId) {
@@ -27,9 +28,7 @@ function ParticipantsContent() {
     try {
       setLoading(true)
       const [eventRes, participantsRes] = await Promise.all([
-        // Fetch event details to get the form schema
         fetch(`/api/events/${params.eventId}`),
-        // Fetch all participants
         fetch(`/api/participants/${params.eventId}`),
       ])
 
@@ -37,6 +36,7 @@ function ParticipantsContent() {
       const participantsData = await participantsRes.json()
       
       let fields = [];
+      let transformedParticipants = [];
 
       if (eventData.success && eventData.event) {
           setEvent(eventData.event)
@@ -44,12 +44,34 @@ function ParticipantsContent() {
       }
       
       if (participantsData.success && participantsData.participants) {
-          setParticipants(participantsData.participants)
+          transformedParticipants = participantsData.participants
       }
       
-      // Determine dynamic headers from the form schema
-      const dynamicHeaders = fields.map(field => field.label)
-      setColumnHeaders(dynamicHeaders)
+      // --- CORE FIX: Data Transformation ---
+      
+      // 1. Create a map for UUID -> Label lookup from the event's form metadata
+      const fieldIdToLabelMap = new Map();
+      fields.forEach(f => {
+          // Both key (the label) and ID (the UUID) are mapped to the display label
+          fieldIdToLabelMap.set(f.label, f.label);
+          fieldIdToLabelMap.set(f.id, f.label);
+      });
+
+      // 2. Transform the participant data: Replace UUID keys with human-readable labels
+      const finalParticipants = transformedParticipants.map(p => {
+          const transformedResponses = {};
+          for (const [key, value] of Object.entries(p.responses)) {
+              // Look up the key (UUID or Label) in the map. Fallback to the key itself if no match (safety)
+              const label = fieldIdToLabelMap.get(key) || key;
+              transformedResponses[label] = value;
+          }
+          return { ...p, responses: transformedResponses };
+      });
+      
+      // 3. Final state update
+      setParticipants(finalParticipants)
+      // The headers are just the labels from the original schema
+      setDynamicFields(fields.map(f => ({ label: f.label })));
 
     } catch (error) {
       console.error('Error fetching data:', error)
@@ -58,6 +80,19 @@ function ParticipantsContent() {
     }
   }
 
+  // Helper function to robustly get the correct response value
+  const getParticipantResponseValue = (participant, field) => {
+      // 1. Try to look up using the new standardized key (field.label)
+      let value = participant.responses[field.label];
+      
+      // 2. If not found, try the old key convention (field.id) for backward compatibility
+      if ((value === undefined || value === null) && field.id) {
+           value = participant.responses[field.id];
+      }
+      
+      return value;
+  };
+
   const exportToCSV = () => {
     if (participants.length === 0) {
       alert('No participants to export')
@@ -65,7 +100,7 @@ function ParticipantsContent() {
     }
 
     // Use the determined column headers (labels) for the CSV
-    const headers = ['#', 'Registration Date', ...columnHeaders]
+    const headers = ['S.No', 'Registration Date', ...dynamicFields.map(f => f.label)] // UPDATED CSV HEADER
     
     const rows = participants.map((p, index) => {
       const row = [
@@ -73,13 +108,9 @@ function ParticipantsContent() {
         new Date(p.created_at).toLocaleString(),
       ]
       
-      // Map responses using the column headers (labels)
-      columnHeaders.forEach((label) => {
-        // Find the matching key in the responses object. 
-        // NOTE: We assume the key in p.responses is the field label OR the field id.
-        // Based on DynamicForm.js and FormBuilder.js, the key is the field.id || field.label. 
-        // For simplicity, we stick to the LABEL, as it is unique and what the admin expects.
-        let value = p.responses[label] || '';
+      // Map responses using the field objects
+      dynamicFields.forEach((field) => {
+        let value = getParticipantResponseValue(p, field) || '';
         
         // Format boolean values
         if (typeof value === 'boolean') {
@@ -88,12 +119,14 @@ function ParticipantsContent() {
 
         row.push(value)
       })
-      return row
+      
+      // Escape cells containing commas/quotes for proper CSV format
+      return row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
     })
 
     const csvContent = [
       headers.join(','),
-      ...rows.map((row) => row.map((cell) => `"${cell}"`).join(',')),
+      ...rows,
     ].join('\n')
 
     const blob = new Blob([csvContent], { type: 'text/csv' })
@@ -117,14 +150,15 @@ function ParticipantsContent() {
   
   // Base columns always shown
   const fixedHeaders = [
-    { label: '#', key: 'index', className: 'w-12' },
+    // MODIFIED: Changed label from '#' to 'S.No'
+    { label: 'S.No', key: 'index', className: 'w-12' }, 
     { label: 'Registration Date', key: 'created_at', className: 'w-40' }
   ];
   
-  // Combine fixed and dynamic headers
+  // Combine fixed and dynamic headers 
   const allHeaders = [
     ...fixedHeaders,
-    ...columnHeaders.map(label => ({ label, key: label })) // Using label as key for dynamic fields
+    ...dynamicFields
   ];
 
 
@@ -172,7 +206,7 @@ function ParticipantsContent() {
                 <TableHeader>
                   <TableRow>
                     {allHeaders.map((header) => (
-                        <TableHead key={header.key} className={header.className}>
+                        <TableHead key={header.id || header.key || header.label} className={header.className}>
                             {header.label}
                         </TableHead>
                     ))}
@@ -188,22 +222,22 @@ function ParticipantsContent() {
                       </TableCell>
 
                       {/* Dynamic Response Columns */}
-                      {columnHeaders.map((label) => {
-                          let value = participant.responses[label] || '';
+                      {dynamicFields.map((field) => {
+                          let value = getParticipantResponseValue(participant, field);
                           
-                          // Format boolean values for display
+                          // Format values for display
                           if (typeof value === 'boolean') {
                               value = value ? (
                                   <span className="text-green-600 font-medium">Yes</span>
                               ) : (
                                   <span className="text-red-600">No</span>
                               );
-                          } else if (value === '') {
+                          } else if (value === '' || value === null || value === undefined) {
                               value = <span className="text-gray-400">-</span>;
                           }
 
                           return (
-                              <TableCell key={`${participant.id}-${label}`} className="text-sm">
+                              <TableCell key={`${participant.id}-${field.label}`} className="text-sm">
                                   {value}
                               </TableCell>
                           );

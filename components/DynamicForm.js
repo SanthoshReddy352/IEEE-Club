@@ -14,19 +14,22 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
   const [errors, setErrors] = useState({})
   const [isSubmitting, setIsSubmitting] = useState(false)
 
-  const handleInputChange = (fieldId, value) => {
-    setFormData({ ...formData, [fieldId]: value })
+  const handleInputChange = (fieldLabel, value) => {
+    // FIX: Use fieldLabel directly as the key for storing data
+    setFormData({ ...formData, [fieldLabel]: value })
     // Clear error when user starts typing
-    if (errors[fieldId]) {
-      setErrors({ ...errors, [fieldId]: null })
+    if (errors[fieldLabel]) {
+      setErrors({ ...errors, [fieldLabel]: null })
     }
   }
 
   const validateForm = () => {
     const newErrors = {}
     fields.forEach((field) => {
-      if (field.required && !formData[field.id || field.label]) {
-        newErrors[field.id || field.label] = `${field.label} is required`
+      // Use the field.label consistently for error tracking
+      const fieldKey = field.label; 
+      if (field.required && !formData[fieldKey]) {
+        newErrors[fieldKey] = `${field.label} is required`
       }
     })
     setErrors(newErrors)
@@ -51,7 +54,8 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
   }
 
   const renderField = (field) => {
-    const fieldId = field.id || field.label
+    // FIX: Use field.label as the unique identifier for the form elements
+    const fieldId = field.label 
     const value = formData[fieldId] || ''
 
     switch (field.type) {
@@ -69,7 +73,7 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
               id={fieldId}
               type={field.type}
               value={value}
-              onChange={(e) => handleInputChange(fieldId, e.target.value)}
+              onChange={(e) => handleInputChange(field.label, e.target.value)}
               placeholder={field.placeholder || `Enter ${field.label.toLowerCase()}`}
               required={field.required}
             />
@@ -89,7 +93,7 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
             <Textarea
               id={fieldId}
               value={value}
-              onChange={(e) => handleInputChange(fieldId, e.target.value)}
+              onChange={(e) => handleInputChange(field.label, e.target.value)}
               placeholder={field.placeholder || `Enter ${field.label.toLowerCase()}`}
               required={field.required}
               rows={4}
@@ -109,7 +113,7 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
             </Label>
             <Select
               value={value}
-              onValueChange={(val) => handleInputChange(fieldId, val)}
+              onValueChange={(val) => handleInputChange(field.label, val)}
             >
               <SelectTrigger>
                 <SelectValue placeholder={`Select ${field.label.toLowerCase()}`} />
@@ -134,7 +138,7 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
             <Checkbox
               id={fieldId}
               checked={value === true}
-              onCheckedChange={(checked) => handleInputChange(fieldId, checked)}
+              onCheckedChange={(checked) => handleInputChange(field.label, checked)}
             />
             <Label htmlFor={fieldId} className="font-normal">
               {field.label}
@@ -154,7 +158,7 @@ export default function DynamicForm({ fields = [], onSubmit, eventId }) {
               id={fieldId}
               type="date"
               value={value}
-              onChange={(e) => handleInputChange(fieldId, e.target.value)}
+              onChange={(e) => handleInputChange(field.label, e.target.value)}
               required={field.required}
             />
             {errors[fieldId] && (
