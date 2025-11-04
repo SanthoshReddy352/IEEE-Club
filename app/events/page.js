@@ -41,6 +41,7 @@ export default function EventsPage() {
 
   const filterEvents = () => {
     let filtered = events
+    const now = new Date();
 
     // Filter by search term
     if (searchTerm) {
@@ -52,7 +53,6 @@ export default function EventsPage() {
 
     // Filter by status
     if (filter === 'active') {
-      const now = new Date();
       filtered = filtered.filter(event => {
         const eventEndDate = event.event_end_date ? parseISO(event.event_end_date) : null;
         const isCompleted = eventEndDate && now > eventEndDate;
@@ -61,7 +61,19 @@ export default function EventsPage() {
         return !isCompleted && event.is_active;
       })
     } else if (filter === 'open') {
-      filtered = filtered.filter(event => event.registration_open)
+      filtered = filtered.filter(event => {
+        const regStartDate = event.registration_start ? parseISO(event.registration_start) : null;
+        const regEndDate = event.registration_end ? parseISO(event.registration_end) : null;
+        const eventEndDate = event.event_end_date ? parseISO(event.event_end_date) : null;
+
+        const isCompleted = eventEndDate && now > eventEndDate;
+        
+        // Check if registration is *actually* open based on dates
+        const isWithinDateRange = regStartDate && regEndDate && now >= regStartDate && now < regEndDate;
+
+        // "Registration Open" = admin toggle is on, it's within the date range, AND the event is not completed
+        return event.registration_open && isWithinDateRange && !isCompleted;
+      })
     }
 
     setFilteredEvents(filtered)
