@@ -6,6 +6,7 @@ import { supabase } from '@/lib/supabase/client'
 
 export function useAdminStatus() {
   const [isAdmin, setIsAdmin] = useState(false)
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false) // NEW
   const [loading, setLoading] = useState(true)
   const [user, setUser] = useState(null)
 
@@ -18,6 +19,7 @@ export function useAdminStatus() {
 
       if (!currentUser) {
         setIsAdmin(false);
+        setIsSuperAdmin(false); // NEW
         setLoading(false);
         return;
       }
@@ -26,17 +28,22 @@ export function useAdminStatus() {
         // Query the public.admin_users table to check for role
         const { data } = await supabase
           .from('admin_users')
-          .select('user_id')
+          .select('role') // MODIFIED: Select 'role'
           .eq('user_id', currentUser.id)
           .maybeSingle(); 
 
-        const isUserAdmin = !!data;
+        const userRole = data?.role; // e.g., 'admin', 'super_admin', or null
+        const isUserAdmin = userRole === 'admin' || userRole === 'super_admin';
+        const isUserSuperAdmin = userRole === 'super_admin';
+
         setIsAdmin(isUserAdmin);
+        setIsSuperAdmin(isUserSuperAdmin); // NEW
 
       } catch (error) {
         // Log the error but fail safely (i.e., user is not considered an admin)
         console.error('Error fetching admin role:', error);
         setIsAdmin(false);
+        setIsSuperAdmin(false); // NEW
       } finally {
         setLoading(false);
       }
@@ -66,5 +73,5 @@ export function useAdminStatus() {
     }
   }, [])
 
-  return { isAdmin, loading, user };
+  return { isAdmin, isSuperAdmin, loading, user }; // MODIFIED: Return isSuperAdmin
 }

@@ -9,18 +9,17 @@ import { Label } from '@/components/ui/label'
 import { Textarea } from '@/components/ui/textarea'
 import { Button } from '@/components/ui/button'
 import { Checkbox } from '@/components/ui/checkbox'
-import { Upload, Link as LinkIcon } from 'lucide-react'
+import { Upload, Link as LinkIcon, ShieldAlert } from 'lucide-react'
 import { useDropzone } from 'react-dropzone'
 import { supabase } from '@/lib/supabase/client'
+import { useAuth } from '@/context/AuthContext' // MODIFIED: Import useAuth
 
 // Helper to convert ISO string (from DB) to local datetime-local format
 const toDateTimeLocal = (isoString) => {
   if (!isoString) return '';
   try {
     const date = new Date(isoString);
-    // Offset the date by the *local* timezone offset to get the correct local time
     const localDate = new Date(date.getTime() - (date.getTimezoneOffset() * 60000));
-    // Format to YYYY-MM-DDTHH:MM
     return localDate.toISOString().slice(0, 16);
   } catch {
     return '';
@@ -30,20 +29,21 @@ const toDateTimeLocal = (isoString) => {
 // Helper to convert datetime-local string (from input) back to ISO format (UTC)
 const toISOString = (dateTimeLocalString) => {
     if (!dateTimeLocalString) return null;
-    // new Date() will parse this as local time and convert to the correct UTC ISO string
     return new Date(dateTimeLocalString).toISOString();
 }
 
+// MODIFIED: Renamed component
 function EditEventContent() {
   const params = useParams()
   const router = useRouter()
+  const [event, setEvent] = useState(null) // MODIFIED: Store full event object
   const [loading, setLoading] = useState(true)
   const [found, setFound] = useState(false) 
   const [formData, setFormData] = useState({
     title: '',
     description: '',
     event_date: '',
-    event_end_date: '', // MODIFIED: Added field
+    event_end_date: '',
     is_active: true,
     registration_open: true,
     registration_start: '',
@@ -54,6 +54,9 @@ function EditEventContent() {
   const [bannerUrl, setBannerUrl] = useState('')
   const [bannerFile, setBannerFile] = useState(null)
   const [isSubmitting, setIsSubmitting] = useState(false)
+  
+  // MODIFIED: Get auth state
+  const { user, isSuperAdmin, loading: authLoading } = useAuth()
 
   const fetchEvent = useCallback(async () => {
     if (!params.id) return;
@@ -62,13 +65,13 @@ function EditEventContent() {
       const data = await response.json()
       if (data.success) {
         const event = data.event
+        setEvent(event) // MODIFIED: Store full event
         
-        // Use the new toDateTimeLocal helper
         setFormData({
           title: event.title,
           description: event.description || '',
           event_date: toDateTimeLocal(event.event_date),
-          event_end_date: toDateTimeLocal(event.event_end_date), // MODIFIED: Added field
+          event_end_date: toDateTimeLocal(event.event_end_date),
           is_active: event.is_active,
           registration_open: event.registration_open,
           registration_start: toDateTimeLocal(event.registration_start), 
@@ -142,19 +145,23 @@ function EditEventContent() {
         finalBannerUrl = bannerUrl
       }
 
-      // Use the new toISOString helper
       const eventData = {
         ...formData,
         banner_url: finalBannerUrl,
         event_date: toISOString(formData.event_date),
-        event_end_date: toISOString(formData.event_end_date), // MODIFIED: Added field
+        event_end_date: toISOString(formData.event_end_date),
         registration_start: toISOString(formData.registration_start),
         registration_end: toISOString(formData.registration_end),
       }
       
+      // MODIFIED: Pass auth token for PUT
+      const { data: { session } } = await supabase.auth.getSession();
       const response = await fetch(`/api/events/${params.id}`, {
         method: 'PUT',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+            'Content-Type': 'application/json',
+            'Authorization': `Bearer ${session.access_token}`
+        },
         body: JSON.stringify(eventData),
       })
 
@@ -163,7 +170,7 @@ function EditEventContent() {
         alert('Event updated successfully!')
         router.push('/admin/events')
       } else {
-        alert('Failed to update event') 
+        alert(`Failed to update event: ${data.error}`) 
         console.error('API Error:', data.error);
       }
     } catch (error) {
@@ -174,7 +181,8 @@ function EditEventContent() {
     }
   }
 
-  if (loading) {
+  // MODIFIED: Include authLoading in check
+  if (loading || authLoading) {
     return (
       <div className="text-center py-12">
         <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#00629B]"></div>
@@ -200,6 +208,30 @@ function EditEventContent() {
     )
   }
 
+  // MODIFIED: Add permission check
+  const canManage = event && user && (isSuperAdmin || event.created_by === user.id);
+  if (!canManage) {
+    return (
+        <div className="container mx-auto px-4 py-12 max-w-3xl">
+            <Card className="border-red-500">
+                <CardHeader>
+                    <CardTitle className="text-red-600 flex items-center">
+                        <ShieldAlert className="mr-2" />
+                        Access Denied
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <p className="text-lg">You do not have permission to edit this event. Only the event creator or a super admin can make changes.</p>
+                    <Button onClick={() => router.push('/admin/events')} className="mt-4" variant="outline">
+                        Back to Events
+                    </Button>
+                </CardContent>
+            </Card>
+        </div>
+    )
+  }
+
+  // If we reach here, user has permission
   return (
     <div className="container mx-auto px-4 py-12 max-w-3xl">
       <h1 className="text-4xl font-bold mb-8">Edit Event</h1>
@@ -230,7 +262,6 @@ function EditEventContent() {
               />
             </div>
 
-            {/* MODIFIED: Event Start/End in a grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="event_date">Event Start Date & Time</Label>
@@ -252,7 +283,6 @@ function EditEventContent() {
               </div>
             </div>
 
-            {/* MODIFIED: Registration Start/End in a grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="registration_start">Registration Start Date & Time</Label>

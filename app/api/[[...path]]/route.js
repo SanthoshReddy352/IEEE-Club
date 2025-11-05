@@ -33,15 +33,14 @@ export async function OPTIONS() {
   return NextResponse.json({}, { headers: corsHeaders })
 }
 
-// Helper to get user from request header (Authorization: Bearer <token>)
-async function getUser(request) {
+// Helper to get user and role from request header
+async function getAdminUser(request) {
   const authHeader = request.headers.get('Authorization')
   if (!authHeader || !authHeader.startsWith('Bearer ')) {
-    return { user: null, error: new Error('No Authorization header') }
+    return { user: null, role: null, error: new Error('No Authorization header') }
   }
 
   const token = authHeader.split(' ')[1]
-  // Create a new supabase client scoped to the user's JWT
   const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
     global: {
       headers: { 'Authorization': `Bearer ${token}` },
@@ -50,8 +49,29 @@ async function getUser(request) {
   
   const { data: { user }, error } = await userSupabase.auth.getUser()
 
-  return { user, error }
+  if (error || !user) {
+      return { user: null, role: null, error }
+  }
+  
+  // Use service key to check the admin_users table
+  const { data: adminData, error: roleError } = await supabase
+      .from('admin_users')
+      .select('role')
+      .eq('user_id', user.id)
+      .maybeSingle(); // MODIFIED: Use .maybeSingle() instead of .single()
+
+  if (roleError) {
+      // This is a real database error, not "not found"
+      return { user, role: null, error: roleError }
+  }
+  
+  if (!adminData) { // MODIFIED: Explicitly check for no data
+      return { user, role: null, error: new Error('User is not an admin.') }
+  }
+
+  return { user, role: adminData.role, error: null }
 }
+
 
 // GET Handler
 export async function GET(request) {
@@ -63,15 +83,14 @@ export async function GET(request) {
     if (segments[0] === 'events' && !segments[1]) {
       let query = supabase
         .from('events')
-        .select('*')
+        .select('*, created_by') // MODIFIED: Select created_by
         .order('created_at', { ascending: false })
 
       // Filter by active status
       if (params.active === 'true') {
         const now = new Date().toISOString();
         query = query
-          .eq('is_active', true) // Must be admin-visible
-          // And event end date is in the future, OR it has no end date (so it's not completed)
+          .eq('is_active', true) 
           .or(`event_end_date.gt.${now},event_end_date.is.null`)
       }
 
@@ -99,7 +118,7 @@ export async function GET(request) {
     if (segments[0] === 'events' && segments[1]) {
       const { data, error } = await supabase
         .from('events')
-        .select('*')
+        .select('*, created_by') // MODIFIED: Select created_by
         .eq('id', segments[1])
         .single()
 
@@ -118,7 +137,16 @@ export async function GET(request) {
     
     // GET /api/profile - Get current user profile
     if (segments[0] === 'profile') {
-        const { user, error: authError } = await getUser(request)
+        const authHeader = request.headers.get('Authorization')
+        if (!authHeader || !authHeader.startsWith('Bearer ')) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401, headers: corsHeaders })
+        }
+        const token = authHeader.split(' ')[1]
+        const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+            global: { headers: { 'Authorization': `Bearer ${token}` } },
+        })
+        const { data: { user }, error: authError } = await userSupabase.auth.getUser()
+        
         if (!user) {
             return NextResponse.json(
                 { success: false, error: authError?.message || 'Unauthorized' },
@@ -126,7 +154,6 @@ export async function GET(request) {
             )
         }
         
-        // Use the authenticated user's ID to fetch their profile
         const { data, error } = await supabase
           .from('profiles')
           .select('name, phone_number, created_at, updated_at')
@@ -149,41 +176,73 @@ export async function GET(request) {
 
     // GET /api/participants/:eventId - Get participants for an event
     if (segments[0] === 'participants' && segments[1] && segments[1] !== 'count') {
-      let query = supabase
-        .from('participants')
-        .select('*')
-        .eq('event_id', segments[1])
-        
-      if (params.userId) {
-        // If userId is present, filter by user and return single result (for frontend check)
-        query = query.eq('user_id', params.userId).maybeSingle()
-      } else {
-        // Otherwise, return all participants (for admin page)
-        query = query.order('created_at', { ascending: false })
-      }
+      const eventId = segments[1];
       
-      const { data, error } = await query
-
-      if (error) {
-        return NextResponse.json(
-          { success: false, error: error.message },
-          { status: 500, headers: corsHeaders }
-        )
-      }
-
-      // If userId was provided, return a single object (or null) as participant
+      // Check if it's a user checking their own registration
       if (params.userId) {
-          return NextResponse.json(
-            { success: true, participant: data },
-            { headers: corsHeaders }
-          )
-      }
+        const authHeader = request.headers.get('Authorization')
+        if (!authHeader) {
+            return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401, headers: corsHeaders })
+        }
+        const token = authHeader.split(' ')[1]
+        const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+            global: { headers: { 'Authorization': `Bearer ${token}` } },
+        })
+        const { data: { user }, error: authError } = await userSupabase.auth.getUser()
 
-      // Otherwise, return the list of participants
-      return NextResponse.json(
-        { success: true, participants: data },
-        { headers: corsHeaders }
-      )
+        if (authError || !user || user.id !== params.userId) {
+             return NextResponse.json({ success: false, error: 'Forbidden' }, { status: 403, headers: corsHeaders })
+        }
+        
+        const { data, error } = await supabase
+            .from('participants')
+            .select('*')
+            .eq('event_id', eventId)
+            .eq('user_id', user.id)
+            .maybeSingle()
+
+        if (error) {
+            return NextResponse.json({ success: false, error: error.message }, { status: 500, headers: corsHeaders })
+        }
+        return NextResponse.json({ success: true, participant: data }, { headers: corsHeaders })
+        
+      } else {
+        // This is an ADMIN request for all participants
+        const { user, role, error: adminError } = await getAdminUser(request);
+        if (adminError || !user) {
+            return NextResponse.json({ success: false, error: adminError?.message || 'Unauthorized' }, { status: 401, headers: corsHeaders })
+        }
+        
+        // Check permissions: Must be super_admin or event owner
+        const { data: eventData, error: eventError } = await supabase
+            .from('events')
+            .select('created_by')
+            .eq('id', eventId)
+            .single();
+
+        if (eventError) {
+             return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404, headers: corsHeaders })
+        }
+        
+        const canManage = role === 'super_admin' || eventData.created_by === user.id;
+        
+        if (!canManage) {
+            return NextResponse.json({ success: false, error: 'Forbidden: You do not own this event' }, { status: 403, headers: corsHeaders })
+        }
+        
+        // Permission granted, fetch participants
+        const { data, error } = await supabase
+            .from('participants')
+            .select('*')
+            .eq('event_id', eventId)
+            .order('created_at', { ascending: false })
+            
+        if (error) {
+            return NextResponse.json({ success: false, error: error.message }, { status: 500, headers: corsHeaders })
+        }
+        
+        return NextResponse.json({ success: true, participants: data }, { headers: corsHeaders })
+      }
     }
 
     // GET /api/participants/count - Get total participant count
@@ -234,17 +293,24 @@ export async function POST(request) {
 
     // POST /api/events - Create new event
     if (segments[0] === 'events' && !segments[1]) {
+      // MODIFIED: Get admin user first
+      const { user, role, error: adminError } = await getAdminUser(request);
+      if (adminError || !user || !role) { // Must have an admin role
+          return NextResponse.json({ success: false, error: adminError?.message || 'Unauthorized' }, { status: 401, headers: corsHeaders })
+      }
+      
       const eventData = {
         title: body.title,
         description: body.description,
         banner_url: body.banner_url,
         event_date: body.event_date || null,
-        event_end_date: body.event_end_date || null, // MODIFIED: Added field
+        event_end_date: body.event_end_date || null,
         is_active: body.is_active !== undefined ? body.is_active : true,
         registration_open: body.registration_open !== undefined ? body.registration_open : true,
         registration_start: body.registration_start || null,
         registration_end: body.registration_end || null,
         form_fields: body.form_fields || [],
+        created_by: user.id, // MODIFIED: Set the owner
       }
 
       const { data, error } = await supabase
@@ -268,9 +334,27 @@ export async function POST(request) {
 
     // POST /api/participants - Create new participant registration
     if (segments[0] === 'participants' && !segments[1]) {
+      const authHeader = request.headers.get('Authorization')
+      let participantUserId = body.user_id; 
+      
+      if (authHeader && authHeader.startsWith('Bearer ')) {
+          const token = authHeader.split(' ')[1]
+          const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+              global: { headers: { 'Authorization': `Bearer ${token}` } },
+          })
+          const { data: { user } } = await userSupabase.auth.getUser()
+          if(user) {
+              participantUserId = user.id;
+          }
+      }
+      
+      if (!participantUserId) {
+          return NextResponse.json({ success: false, error: 'Unauthorized: Missing user ID' }, { status: 401, headers: corsHeaders })
+      }
+      
       const participantData = {
         event_id: body.event_id,
-        user_id: body.user_id,
+        user_id: participantUserId, 
         responses: body.responses,
       }
 
@@ -281,11 +365,10 @@ export async function POST(request) {
         .single()
 
       if (error) {
-        // Special handling for unique constraint violation (already registered)
-        if (error.code === '23505') {
+        if (error.code === '23505') { 
             return NextResponse.json(
                 { success: false, error: 'User is already registered for this event.' },
-                { status: 409, headers: corsHeaders } // HTTP 409 Conflict
+                { status: 409, headers: corsHeaders } 
             )
         }
         
@@ -349,7 +432,16 @@ export async function PUT(request) {
     
     // PUT /api/profile - Update current user profile
     if (segments[0] === 'profile') {
-        const { user, error: authError } = await getUser(request)
+        const authHeader = request.headers.get('Authorization')
+        if (!authHeader) {
+             return NextResponse.json({ success: false, error: 'Unauthorized' }, { status: 401, headers: corsHeaders })
+        }
+        const token = authHeader.split(' ')[1]
+        const userSupabase = createClient(supabaseUrl, supabaseAnonKey, {
+            global: { headers: { 'Authorization': `Bearer ${token}` } },
+        })
+        const { data: { user }, error: authError } = await userSupabase.auth.getUser()
+        
         if (!user) {
             return NextResponse.json(
                 { success: false, error: authError?.message || 'Unauthorized' },
@@ -358,13 +450,12 @@ export async function PUT(request) {
         }
         
         const updateData = {
-            id: user.id, // Primary key
+            id: user.id,
             name: body.name,
             phone_number: body.phone_number,
             updated_at: new Date().toISOString()
         }
 
-        // Use upsert to either insert a new row or update an existing one for the profile
         const { data, error } = await supabase
             .from('profiles')
             .upsert(updateData)
@@ -372,36 +463,50 @@ export async function PUT(request) {
             .single()
 
         if (error) {
-            return NextResponse.json(
-                { success: false, error: error.message },
-                { status: 500, headers: corsHeaders }
-            )
+            return NextResponse.json({ success: false, error: error.message }, { status: 500, headers: corsHeaders })
         }
 
-        return NextResponse.json(
-            { success: true, profile: data },
-            { headers: corsHeaders }
-        )
+        return NextResponse.json({ success: true, profile: data }, { headers: corsHeaders })
     }
 
 
     // PUT /api/events/:id - Update event
     if (segments[0] === 'events' && segments[1]) {
       const eventId = segments[1]
-      const updateData = {}
+      
+      const { user, role, error: adminError } = await getAdminUser(request);
+      if (adminError || !user) {
+          return NextResponse.json({ success: false, error: adminError?.message || 'Unauthorized' }, { status: 401, headers: corsHeaders })
+      }
+      
+      const { data: eventData, error: eventError } = await supabase
+          .from('events')
+          .select('created_by')
+          .eq('id', eventId)
+          .single();
 
-      // Only update fields that are provided
+      if (eventError) {
+           return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404, headers: corsHeaders })
+      }
+      
+      const canManage = role === 'super_admin' || eventData.created_by === user.id;
+      
+      if (!canManage) {
+          return NextResponse.json({ success: false, error: 'Forbidden: You do not own this event' }, { status: 403, headers: corsHeaders })
+      }
+
+      // Permission Granted, proceed with update
+      const updateData = {}
       if (body.title !== undefined) updateData.title = body.title
       if (body.description !== undefined) updateData.description = body.description
       if (body.banner_url !== undefined) updateData.banner_url = body.banner_url
       if (body.event_date !== undefined) updateData.event_date = body.event_date
-      if (body.event_end_date !== undefined) updateData.event_end_date = body.event_end_date // MODIFIED: Added field
+      if (body.event_end_date !== undefined) updateData.event_end_date = body.event_end_date
       if (body.is_active !== undefined) updateData.is_active = body.is_active
       if (body.registration_open !== undefined) updateData.registration_open = body.registration_open
       if (body.registration_start !== undefined) updateData.registration_start = body.registration_start
       if (body.registration_end !== undefined) updateData.registration_end = body.registration_end
       if (body.form_fields !== undefined) updateData.form_fields = body.form_fields
-
       updateData.updated_at = new Date().toISOString()
 
       const { data, error } = await supabase
@@ -446,6 +551,28 @@ export async function DELETE(request) {
     if (segments[0] === 'events' && segments[1]) {
       const eventId = segments[1]
 
+      const { user, role, error: adminError } = await getAdminUser(request);
+      if (adminError || !user) {
+          return NextResponse.json({ success: false, error: adminError?.message || 'Unauthorized' }, { status: 401, headers: corsHeaders })
+      }
+      
+      const { data: eventData, error: eventError } = await supabase
+          .from('events')
+          .select('created_by')
+          .eq('id', eventId)
+          .single();
+
+      if (eventError) {
+           return NextResponse.json({ success: false, error: 'Event not found' }, { status: 404, headers: corsHeaders })
+      }
+      
+      const canManage = role === 'super_admin' || eventData.created_by === user.id;
+      
+      if (!canManage) {
+          return NextResponse.json({ success: false, error: 'Forbidden: You do not own this event' }, { status: 403, headers: corsHeaders })
+      }
+
+      // Permission Granted, proceed with delete
       const { error } = await supabase
         .from('events')
         .delete()

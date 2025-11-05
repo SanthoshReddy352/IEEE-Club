@@ -26,7 +26,7 @@ function CreateEventContent() {
     title: '',
     description: '',
     event_date: '',
-    event_end_date: '', // MODIFIED: Added field
+    event_end_date: '',
     is_active: true,
     registration_open: true,
     registration_start: '', 
@@ -78,6 +78,18 @@ function CreateEventContent() {
     setIsSubmitting(true)
 
     try {
+      // --- START OF FIX ---
+      // Get the user's session token to authorize the API request
+      const { data: { session }, error: sessionError } = await supabase.auth.getSession();
+
+      if (sessionError || !session) {
+        alert('Authentication error. Please log in again.');
+        setIsSubmitting(false);
+        router.push('/admin/login');
+        return;
+      }
+      // --- END OF FIX ---
+
       let finalBannerUrl = ''
 
       if (bannerMode === 'upload' && bannerFile) {
@@ -86,20 +98,23 @@ function CreateEventContent() {
         finalBannerUrl = bannerUrl
       }
 
-      // Convert datetime-local strings back to ISO strings for database ingestion
       const eventData = {
         ...formData,
         banner_url: finalBannerUrl,
         form_fields: [],
         event_date: toISOString(formData.event_date),
-        event_end_date: toISOString(formData.event_end_date), // MODIFIED: Added field
+        event_end_date: toISOString(formData.event_end_date),
         registration_start: toISOString(formData.registration_start),
         registration_end: toISOString(formData.registration_end),
       }
 
       const response = await fetch('/api/events', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+            'Content-Type': 'application/json',
+            // MODIFIED: Pass the authentication token
+            'Authorization': `Bearer ${session.access_token}` 
+        },
         body: JSON.stringify(eventData),
       })
 
@@ -108,7 +123,7 @@ function CreateEventContent() {
         // Redirect to form builder after successful creation
         router.push(`/admin/events/${data.event.id}/form-builder`)
       } else {
-        alert('Failed to create event')
+        alert(`Failed to create event: ${data.error}`) // Show the specific error
         console.error('API Error:', data.error);
       }
     } catch (error) {
@@ -151,7 +166,6 @@ function CreateEventContent() {
               />
             </div>
 
-            {/* MODIFIED: Event Start/End in a grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="event_date">Event Start Date & Time</Label>
@@ -173,7 +187,6 @@ function CreateEventContent() {
               </div>
             </div>
             
-            {/* MODIFIED: Registration Start/End in a grid */}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="space-y-2">
                 <Label htmlFor="registration_start">Registration Start Date & Time</Label>

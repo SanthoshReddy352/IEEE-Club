@@ -31,15 +31,18 @@ export default function AdminLoginPage() {
       // Check if the newly logged-in user is an admin
       const user = data.user;
       
+      // MODIFIED: Select 'role'
       const { data: adminData, error: adminError } = await supabase
         .from('admin_users')
-        .select('user_id')
+        .select('role') // Check for the role
         .eq('user_id', user.id)
         .maybeSingle() 
 
-      const isAdmin = !!adminData;
+      // MODIFIED: Check if role is 'admin' or 'super_admin'
+      const userRole = adminData?.role;
+      const isAdmin = userRole === 'admin' || userRole === 'super_admin';
       
-      if (adminError && adminError.message !== 'Policy violation') {
+      if (adminError && adminError.message !== 'Policy violation' && !adminData) {
           // If we can't check the admin status for some other DB error
           throw adminError; 
       }
@@ -67,7 +70,7 @@ export default function AdminLoginPage() {
             <span className="text-white font-bold text-2xl">IEEE</span>
           </div>
           <h1 className="text-3xl font-bold">Admin Portal</h1>
-          <p className="text-gray-600 mt-2">Manage events and participants. Logins must be created via Supabase Console.</p>
+          <p className="text-gray-600 mt-2">Manage events and participants. Contact a super-admin to get access.</p>
         </div>
 
         {/* Keeping Tabs structure simple for single form */}

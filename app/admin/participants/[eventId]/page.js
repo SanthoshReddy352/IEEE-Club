@@ -3,11 +3,13 @@
 import { useState, useEffect } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import ProtectedRoute from '@/components/ProtectedRoute'
-import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/components/ui/card' // MODIFIED
 import { Button } from '@/components/ui/button'
 import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@/components/ui/table'
-import { ArrowLeft, Download } from 'lucide-react'
+import { ArrowLeft, Download, ShieldAlert } from 'lucide-react' // MODIFIED
 import { format } from 'date-fns'
+import { useAuth } from '@/context/AuthContext' // MODIFIED
+import { supabase } from '@/lib/supabase/client' // MODIFIED
 
 function ParticipantsContent() {
   const params = useParams()
@@ -15,21 +17,29 @@ function ParticipantsContent() {
   const [event, setEvent] = useState(null)
   const [participants, setParticipants] = useState([])
   const [loading, setLoading] = useState(true)
-  // Stores the final list of fields, used for generating headers and CSV columns
   const [dynamicFields, setDynamicFields] = useState([]) 
+  const { user, isSuperAdmin, loading: authLoading } = useAuth() // MODIFIED
 
   useEffect(() => {
-    if (params.eventId) {
+    if (params.eventId && user) { // MODIFIED: Wait for user
       fetchData()
     }
-  }, [params.eventId])
+  }, [params.eventId, user]) // MODIFIED: re-run if user loads
 
   const fetchData = async () => {
     try {
       setLoading(true)
+      // MODIFIED: Get session for authenticated API calls
+      const { data: { session } } = await supabase.auth.getSession();
+      if (!session) {
+          throw new Error("User not authenticated");
+      }
+      
+      const authHeader = { 'Authorization': `Bearer ${session.access_token}` };
+
       const [eventRes, participantsRes] = await Promise.all([
-        fetch(`/api/events/${params.eventId}`),
-        fetch(`/api/participants/${params.eventId}`),
+        fetch(`/api/events/${params.eventId}`), // Event fetch is public
+        fetch(`/api/participants/${params.eventId}`, { headers: authHeader }), // Participants fetch is protected
       ])
 
       const eventData = await eventRes.json()
@@ -43,35 +53,38 @@ function ParticipantsContent() {
           fields = eventData.event.form_fields || []
       }
       
+      // MODIFIED: Check for auth error on participants
+      if (participantsRes.status === 403) {
+          console.warn("Access denied to participants list.");
+          // Event data loaded, but participant data is forbidden
+          // The component's render logic will handle the access denied message
+          setLoading(false);
+          return; 
+      }
+
       if (participantsData.success && participantsData.participants) {
           transformedParticipants = participantsData.participants
       }
       
-      // --- CORE FIX: Data Transformation ---
-      
-      // 1. Create a map for UUID -> Label lookup from the event's form metadata
       const fieldIdToLabelMap = new Map();
       fields.forEach(f => {
-          // Both key (the label) and ID (the UUID) are mapped to the display label
           fieldIdToLabelMap.set(f.label, f.label);
           fieldIdToLabelMap.set(f.id, f.label);
       });
 
-      // 2. Transform the participant data: Replace UUID keys with human-readable labels
       const finalParticipants = transformedParticipants.map(p => {
           const transformedResponses = {};
-          for (const [key, value] of Object.entries(p.responses)) {
-              // Look up the key (UUID or Label) in the map. Fallback to the key itself if no match (safety)
-              const label = fieldIdToLabelMap.get(key) || key;
-              transformedResponses[label] = value;
+          if (p.responses) { // Add check for null responses
+              for (const [key, value] of Object.entries(p.responses)) {
+                  const label = fieldIdToLabelMap.get(key) || key;
+                  transformedResponses[label] = value;
+              }
           }
           return { ...p, responses: transformedResponses };
       });
       
-      // 3. Final state update
       setParticipants(finalParticipants)
-      // The headers are just the labels from the original schema
-      setDynamicFields(fields.map(f => ({ label: f.label })));
+      setDynamicFields(fields.map(f => ({ label: f.label, id: f.id }))); // MODIFIED: Pass ID too
 
     } catch (error) {
       console.error('Error fetching data:', error)
@@ -80,12 +93,9 @@ function ParticipantsContent() {
     }
   }
 
-  // Helper function to robustly get the correct response value
   const getParticipantResponseValue = (participant, field) => {
-      // 1. Try to look up using the new standardized key (field.label)
       let value = participant.responses[field.label];
       
-      // 2. If not found, try the old key convention (field.id) for backward compatibility
       if ((value === undefined || value === null) && field.id) {
            value = participant.responses[field.id];
       }
@@ -99,8 +109,7 @@ function ParticipantsContent() {
       return
     }
 
-    // Use the determined column headers (labels) for the CSV
-    const headers = ['S.No', 'Registration Date', ...dynamicFields.map(f => f.label)] // UPDATED CSV HEADER
+    const headers = ['S.No', 'Registration Date', ...dynamicFields.map(f => f.label)] 
     
     const rows = participants.map((p, index) => {
       const row = [
@@ -108,11 +117,9 @@ function ParticipantsContent() {
         new Date(p.created_at).toLocaleString(),
       ]
       
-      // Map responses using the field objects
       dynamicFields.forEach((field) => {
         let value = getParticipantResponseValue(p, field) || '';
         
-        // Format boolean values
         if (typeof value === 'boolean') {
              value = value ? 'Yes' : 'No';
         }
@@ -120,7 +127,6 @@ function ParticipantsContent() {
         row.push(value)
       })
       
-      // Escape cells containing commas/quotes for proper CSV format
       return row.map((cell) => `"${String(cell).replace(/"/g, '""')}"`).join(',')
     })
 
@@ -138,7 +144,8 @@ function ParticipantsContent() {
     window.URL.revokeObjectURL(url)
   }
 
-  if (loading) {
+  // MODIFIED: Include authLoading
+  if (loading || authLoading) {
     return (
       <div className="text-center py-12">
         <div className="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-[#00629B]"></div>
@@ -146,16 +153,36 @@ function ParticipantsContent() {
     )
   }
 
+  // MODIFIED: Add permission check
+  const canManage = event && user && (isSuperAdmin || event.created_by === user.id);
+  if (!loading && !authLoading && event && !canManage) {
+    return (
+        <div className="container mx-auto px-4 py-12 max-w-3xl">
+            <Card className="border-red-500">
+                <CardHeader>
+                    <CardTitle className="text-red-600 flex items-center">
+                        <ShieldAlert className="mr-2" />
+                        Access Denied
+                    </CardTitle>
+                </CardHeader>
+                <CardContent>
+                    <p className="text-lg">You do not have permission to view participants for this event. Only the event creator or a super admin can access this list.</p>
+                    <Button onClick={() => router.push('/admin/events')} className="mt-4" variant="outline">
+                        Back to Events
+                    </Button>
+                </CardContent>
+            </Card>
+        </div>
+    )
+  }
+  
   // --- RENDERING LOGIC ---
   
-  // Base columns always shown
   const fixedHeaders = [
-    // MODIFIED: Changed label from '#' to 'S.No'
     { label: 'S.No', key: 'index', className: 'w-12' }, 
     { label: 'Registration Date', key: 'created_at', className: 'w-40' }
   ];
   
-  // Combine fixed and dynamic headers 
   const allHeaders = [
     ...fixedHeaders,
     ...dynamicFields
@@ -215,17 +242,14 @@ function ParticipantsContent() {
                 <TableBody>
                   {participants.map((participant, index) => (
                     <TableRow key={participant.id}>
-                      {/* Fixed Columns */}
                       <TableCell>{index + 1}</TableCell>
                       <TableCell className="text-sm">
                         {format(new Date(participant.created_at), 'MMM dd, yyyy HH:mm')}
                       </TableCell>
 
-                      {/* Dynamic Response Columns */}
                       {dynamicFields.map((field) => {
                           let value = getParticipantResponseValue(participant, field);
                           
-                          // Format values for display
                           if (typeof value === 'boolean') {
                               value = value ? (
                                   <span className="text-green-600 font-medium">Yes</span>
